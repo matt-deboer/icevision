@@ -61,6 +61,7 @@ def create_model_config(
     pretrained: bool = True,
     checkpoints_path: Optional[Union[str, Path]] = "checkpoints",
     force_download=False,
+    cfg_options=None,
 ):
 
     model_name = backbone.model_name
@@ -68,6 +69,7 @@ def create_model_config(
     weights_url = backbone.weights_url
 
     # download weights
+    weights_path = None
     if pretrained and weights_url:
         save_dir = Path(checkpoints_path) / model_name
         save_dir.mkdir(exist_ok=True, parents=True)
@@ -79,5 +81,8 @@ def create_model_config(
             download_url(url=weights_url, save_path=str(weights_path))
 
     cfg = Config.fromfile(config_path)
+
+    if cfg_options is not None:
+        cfg.merge_from_dict(cfg_options)
 
     return cfg, weights_path
