@@ -10,12 +10,14 @@ __all__ = [
     "draw_mask",
     "draw_keypoints",
     "draw_label",
+    "draw_segmentation_mask",
 ]
 
 from icevision.imports import *
 from icevision.data import *
 from icevision.core import *
 from icevision.visualize.utils import *
+from matplotlib.colors import LinearSegmentedColormap
 
 # This should probably move elsewhere
 from PIL import Image, ImageFont, ImageDraw
@@ -77,7 +79,6 @@ def draw_sample(
     """
     img = np.asarray(sample.img).copy()  # HACK
     num_classification_plotted = 0
-
     # Dynamic font size based on image height
     if font_size is None:
         font_size = sample.img_size.height / dynamic_font_size_div_factor
@@ -85,7 +86,28 @@ def draw_sample(
     if denormalize_fn is not None:
         img = denormalize_fn(img)
 
+    # HACK to visualize segmentation mask
     for task, composite in sample.task_composites.items():
+        if task == "segmentation":
+            cm = rand_cmap(sample.segmentation.class_map.num_classes, verbose=False)
+            if composite.mask_array is None:
+                if isinstance(composite.masks[0], RLE):
+                    masks = [
+                        mask.to_mask(img.shape[1], img.shape[0]).data
+                        for mask in composite.masks
+                    ]
+                elif isinstance(composite.masks[0], EncodedRLEs):
+                    masks = composite.masks[0].to_mask(img.shape[0], img.shape[1]).data
+                elif isinstance(composite.masks[0], MaskArray):
+                    mask = composite.masks[0]
+                else:
+                    raise ValueError(
+                        "Mask has to be of they RLE, EncodedRLEs or MaskArray."
+                    )
+            else:
+                mask = composite.mask_array
+            return draw_segmentation_mask(img, mask, cm, display_mask=display_mask)
+
         # Should break if no ClassMap found in composite.
         #  Should be as the only composite without ClassMap should be
         #  `sample.common`. This is a foundational assumption? #NOTE
@@ -104,7 +126,22 @@ def draw_sample(
 
         # HACK
         if hasattr(composite, "masks"):
-            masks = composite.masks.to_mask(h=sample.height, w=sample.width)
+            if composite.mask_array is None:
+                if isinstance(composite.masks[0], RLE):
+                    masks = [
+                        mask.to_mask(img.shape[1], img.shape[0]).data
+                        for mask in composite.masks
+                    ]
+                elif isinstance(composite.masks[0], EncodedRLEs):
+                    masks = composite.masks[0].to_mask(img.shape[0], img.shape[1]).data
+                elif isinstance(composite.masks[0], MaskArray):
+                    mask = composite.masks[0]
+                else:
+                    raise ValueError(
+                        "Mask has to be of they RLE, EncodedRLEs or MaskArray."
+                    )
+            else:
+                masks = composite.mask_array
         else:
             masks = []
 
@@ -135,7 +172,6 @@ def draw_sample(
             if color_map is not None:
                 color = as_rgb_tuple(color_map[label])
                 color = np.array(color).astype(np.float)
-
             if display_mask and mask is not None:
                 img = draw_mask(
                     img=img,
@@ -230,7 +266,7 @@ def draw_label(
         caption = str(label)
     if prettify:
         # We could introduce a callback here for more complex label renaming
-        caption = prefix + caption
+        caption = str(prefix) + str(caption)
         caption = prettify_func(caption)
 
     # Append label confidence to caption if applicable
@@ -531,7 +567,7 @@ def draw_mask(
     # Add alpha with 0 transparency. We draw the mask with border color first
     color = np.append(color, 255)
     mask_arr = np.zeros((h, w, 4), dtype=np.uint8)
-    mask_arr[mask_idxs] = color
+    mask_arr[mask_idxs[1:]] = color
 
     # Now create a second mask and draw the desired color on top of the
     # border mask. If `border_thickness` is 0, this replaces the border mask
@@ -547,6 +583,34 @@ def draw_mask(
     # Key concept is that alpha for non-mask pixels are 0 (transparent)
     img.putalpha(255)
     img = PIL.Image.alpha_composite(img, mask_pil)
+    return np.array(img)
+
+
+def draw_segmentation_mask(
+    img: np.ndarray,
+    mask: MaskArray,
+    cmap: LinearSegmentedColormap,
+    display_mask: bool = True,
+    alpha: float = 0.5,
+):
+    img = PIL.Image.fromarray(img).convert("RGB")
+
+    if display_mask:
+        w, h = img.size
+        mask_arr = np.zeros((h, w, 3), dtype=np.uint8)
+        mask = mask.data.squeeze()
+
+        assert mask.shape == (h, w), (
+            "image and mask size should be the same"
+            f"but got image:{(w, h)}; mask: {(mask.shape[::-1])}"
+        )
+
+        for class_idx in np.unique(mask):
+            mask_idxs = mask == class_idx
+            mask_arr[mask_idxs] = np.array(cmap(class_idx)[:3]) * 255
+
+        mask_pil = PIL.Image.fromarray(mask_arr)
+        img = PIL.Image.blend(img, mask_pil, alpha=alpha)
 
     return np.array(img)
 

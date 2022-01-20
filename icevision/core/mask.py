@@ -6,6 +6,7 @@ __all__ = [
     "RLE",
     "Polygon",
     "EncodedRLEs",
+    "SemanticMaskFile",
 ]
 
 from icevision.imports import *
@@ -66,6 +67,8 @@ class MaskArray(Mask):
     """
 
     def __init__(self, data: np.uint8):
+        if len(data.shape) == 2:
+            data = np.expand_dims(data, 0)
         self.data = data.astype(np.uint8)
 
     def __len__(self):
@@ -81,9 +84,17 @@ class MaskArray(Mask):
         return self
 
     def to_erles(self, h, w) -> EncodedRLEs:
-        return EncodedRLEs(
-            mask_utils.encode(np.asfortranarray(self.data.transpose(1, 2, 0)))
-        )
+        # HACK: force empty annotations to have valid shape
+        if len(self.data.shape) == 1:
+            return EncodedRLEs(
+                mask_utils.encode(
+                    np.asfortranarray(self.data[:, None, None].transpose(1, 2, 0))
+                )
+            )
+        else:
+            return EncodedRLEs(
+                mask_utils.encode(np.asfortranarray(self.data.transpose(1, 2, 0)))
+            )
 
     def to_coco_rle(self, h, w) -> List[dict]:
         """From https://stackoverflow.com/a/49547872/6772672"""
@@ -110,7 +121,10 @@ class MaskArray(Mask):
             return masks.to_mask(h, w)
         else:
             masks_arrays = [o.to_mask(h=h, w=w).data for o in masks]
-            return cls(np.concatenate(masks_arrays))
+            if len(masks_arrays) == 0:
+                return cls(np.array([]))
+            else:
+                return cls(np.concatenate(masks_arrays))
 
 
 class MaskFile(Mask):
@@ -124,7 +138,7 @@ class MaskFile(Mask):
         self.filepath = Path(filepath)
 
     def to_mask(self, h, w):
-        mask = open_img(self.filepath, gray=True)
+        mask = np.array(open_img(self.filepath, gray=True))
         obj_ids = np.unique(mask)[1:]
         masks = mask == obj_ids[:, None, None]
         return MaskArray(masks)
@@ -248,3 +262,35 @@ class Polygon(Mask):
         erles = mask_utils.frPyObjects(self.points, h, w)
         erle = mask_utils.merge(erles)  # make unconnected polygons a single mask
         return EncodedRLEs([erle])
+
+
+class SemanticMaskFile(Mask):
+    """Holds the path to mask image file.
+
+    # Arguments
+        filepath: Path to the mask image file.
+    """
+
+    def __init__(self, filepath: Union[str, Path], binary=False):
+        self.filepath = Path(filepath)
+        self.binary = binary
+
+    def to_mask(self, h, w):
+        # TODO: convert the 255 masks
+        mask = open_img(self.filepath, gray=True)
+        # HACK: because open_img now return PIL
+        mask = np.array(mask)
+
+        # convert 255 pixels to 1
+        if self.binary:
+            mask[mask == 255] = 1
+
+        return MaskArray(mask[None])
+
+    def to_coco_rle(self, h, w) -> List[dict]:
+        raise NotImplementedError
+        return self.to_mask(h=h, w=w).to_coco_rle(h=h, w=w)
+
+    def to_erles(self, h, w) -> EncodedRLEs:
+        # HACK: Doesn't make sense to convert to ERLE?
+        return self

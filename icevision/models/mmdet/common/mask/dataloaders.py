@@ -107,8 +107,10 @@ def _img_meta_mask(record):
 
 def _masks(record):
     if len(record.detection.masks) == 0:
-        raise RuntimeError("Negative samples still needs to be implemented")
+        raise RuntimeError(
+            "Negative samples still needs to be implemented. This error might appear due to cropping, please check your transformations."
+        )
     else:
-        mask = record.detection.masks.data
+        mask = record.detection.mask_array.data
         _, h, w = mask.shape
         return BitmapMasks(mask, height=h, width=w)
